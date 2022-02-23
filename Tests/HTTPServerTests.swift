@@ -38,6 +38,17 @@ import FoundationNetworking
 
 final class HTTPServerTests: XCTestCase {
 
+    let pool: AsyncSocketPool = PollingSocketPool()
+    var task: Task<Void, Error>?
+
+    override func setUp() {
+        task = Task { try await pool.run() }
+    }
+
+    override func tearDown() {
+        task?.cancel()
+    }
+
     func testRequests_AreMatchedToHandlers_ViaRoute() async throws {
         let server = HTTPServer(port: 8008)
 
@@ -150,6 +161,92 @@ final class HTTPServerTests: XCTestCase {
         task.cancel()
     }
 #endif
+
+    func testServerWithUnixSocket() async throws {
+        let socket = try Socket(domain: AF_UNIX, type: Socket.stream)
+        let addr = Socket.sockaddr_un(family: AF_UNIX, path: "a1")
+        try? Socket.unlink(addr)
+        try socket.bind(addr)
+        try socket.listen()
+
+        let server = HTTPServer(port: 8080)
+        await server.appendHandler(for: "*") { _ in
+            return HTTPResponse.make(statusCode: .accepted)
+        }
+
+        let task = Task {
+            try await server.start(on: socket)
+        }
+
+        let socket1 = try Socket(domain: AF_UNIX, type: Socket.stream)
+        let addr1 = Socket.sockaddr_un(family: AF_UNIX, path: "a2")
+        try? Socket.unlink(addr1)
+        try socket1.bind(addr1)
+        try socket1.connect(addr)
+
+        let asyncSocket1 = try AsyncSocket(socket: socket1, pool: pool)
+        try await asyncSocket1.writeString(
+            """
+            GET /hello/world HTTP/1.1\r
+            \r
+
+            """
+        )
+
+        let response = try await asyncSocket1.readString(length: 21)
+        XCTAssertEqual(
+            response,
+            "HTTP/1.1 202 Accepted"
+        )
+        task.cancel()
+    }
 }
 
+extension Socket {
 
+    static func sockaddr_un(family: Int32, path: String) -> sockaddr_un {
+        var addr = Socket.sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let len = UInt8(MemoryLayout<UInt8>.size + MemoryLayout<sa_family_t>.size + path.utf8.count + 1)
+        _ = withUnsafeMutablePointer(to: &addr.sun_path.0) { ptr in
+            path.withCString {
+                strncpy(ptr, $0, Int(len))
+            }
+        }
+
+        #if canImport(Darwin)
+        addr.sun_len = len
+        #endif
+
+        return addr
+    }
+
+    static func unlink(_ addr: sockaddr_un) throws {
+        var addr = addr
+        if Socket.unlink(&addr.sun_path.0) == -1 {
+            throw SocketError.makeFailed("Unlink")
+        }
+    }
+
+    func bind(_ addr: sockaddr_un) throws {
+        var addr = addr
+        let result = withUnsafePointer(to: &addr) {
+            Socket.bind(file, UnsafePointer<sockaddr>(OpaquePointer($0)), socklen_t(MemoryLayout<sockaddr_un>.size))
+        }
+
+        if result == -1 {
+            throw SocketError.makeFailed("Bind")
+        }
+    }
+
+    func connect(_ addr: sockaddr_un) throws {
+        var addr = addr
+        let result = withUnsafePointer(to: &addr) {
+            Socket.connect(file, UnsafePointer<sockaddr>(OpaquePointer($0)), socklen_t(MemoryLayout<sockaddr_un>.size))
+        }
+
+        if result == -1 {
+            throw SocketError.makeFailed("Connect")
+        }
+    }
+}

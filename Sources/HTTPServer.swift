@@ -75,7 +75,7 @@ public final actor HTTPServer {
         }
     }
 
-    private func start(on socket: Socket) async throws {
+    func start(on socket: Socket) async throws {
         let pool = PollingSocketPool()
         let asyncSocket = try AsyncSocket(socket: socket, pool: pool)
         logger?.logInfo("starting server port: \(port)")

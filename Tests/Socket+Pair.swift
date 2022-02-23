@@ -39,6 +39,30 @@ import Glibc
 
 extension Socket {
 
+    static func connect(_ fd: Int32, _ addr: UnsafePointer<sockaddr>!, _ len: socklen_t) -> Int32 {
+    #if canImport(Darwin)
+        return Darwin.connect(fd, addr, len)
+    #else
+        return Glibc.connect(fd, addr, len)
+    #endif
+    }
+
+    static func unlink(_ addr: UnsafePointer<CChar>!) -> Int32 {
+    #if canImport(Darwin)
+        return Darwin.unlink(addr)
+    #else
+        return Glibc.unlink(addr)
+    #endif
+    }
+
+    static func sockaddr_un() -> sockaddr_un {
+    #if canImport(Darwin)
+        return Darwin.sockaddr_un()
+    #else
+        return Glibc.sockaddr_un()
+    #endif
+    }
+
     static func socketpair(_ domain: Int32, _ type: Int32, _ protocol: Int32) -> (Int32, Int32) {
         var sockets: [Int32] = [-1, -1]
         #if canImport(Darwin)
